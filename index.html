@@ -129,6 +129,10 @@ footer{color:var(--sub);font-size:12px;margin-top:22px}
     <div class="tests" id="tests" role="tablist" aria-label="회차 선택"></div>
   </header>
 
+  <div id="sndbar" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0;font-size:13px">
+    <button class="sbtn" id="sndTest" type="button">🔊 소리 테스트</button>
+    <span id="sndMsg" style="opacity:.8">소리가 안 나면 먼저 눌러 보세요 (아이폰은 무음 스위치 해제 + 볼륨 확인)</span>
+  </div>
   <div class="warn" id="warn">이 브라우저에서 일본어 음성을 찾지 못했습니다. Chrome·Edge·Safari 최신 버전을 쓰거나, 기기 설정에서 일본어 음성을 설치해 주세요. (아래 “교재 MP3로 연습”은 음성이 없어도 동작합니다.)</div>
 
   <nav class="picker" id="picker" aria-label="문항 선택"></nav>
@@ -302,19 +306,29 @@ function loadVoices(){
 function voiceFor(id){ const u = $('#'+id).value; return S.voices.find(v => v.voiceURI === u) || null; }
 
 /* ---------- speaking ---------- */
+let started = false;
+function sndMsg(m){ const e = $('#sndMsg'); if (e) e.textContent = m; }
+let unlocked = false;
+function unlockSpeech(){
+  if (!window.speechSynthesis || started || unlocked) return; unlocked = true;
+  try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; u.lang = 'ja-JP'; speechSynthesis.speak(u); } catch(e){}
+}
 function speak(seg){
   return new Promise(resolve => {
     if (!window.speechSynthesis){ resolve(1500); return; }
+    try { speechSynthesis.resume(); } catch(e){}
     const u = new SpeechSynthesisUtterance(plain(seg.text));
-    u.lang = 'ja-JP'; u.rate = S.speed;
+    u.lang = 'ja-JP'; u.rate = S.speed; u.volume = 1;
     const id = seg.spk === 'F' ? 'vF' : seg.spk === 'M' ? 'vM' : 'vN';
     const v = voiceFor(id); if (v) u.voice = v;
     const same = voiceFor('vF') && voiceFor('vM') && voiceFor('vF').voiceURI === voiceFor('vM').voiceURI;
     u.pitch = same ? (seg.spk === 'F' ? 1.15 : seg.spk === 'M' ? (seg.alt ? 0.7 : 0.85) : 1) : (seg.alt ? 0.85 : 1);
-    let t0 = performance.now(), fin = false;
-    const done = () => { if (fin) return; fin = true; clearTimeout(wd); resolve(performance.now() - t0); };
-    u.onstart = () => { t0 = performance.now(); };
-    u.onend = done; u.onerror = done;
+    let t0 = performance.now(), fin = false, began = false;
+    const done = () => { if (fin) return; fin = true; clearTimeout(wd); clearTimeout(ns); resolve(performance.now() - t0); };
+    u.onstart = () => { began = true; started = true; t0 = performance.now(); sndMsg('재생 중'); };
+    u.onend = done;
+    u.onerror = e => { if (e && e.error && e.error !== 'interrupted' && e.error !== 'canceled') sndMsg('음성 오류: ' + e.error + ' — 무음 스위치·볼륨·일본어 음성 설치를 확인하세요'); done(); };
+    const ns = setTimeout(() => { if (!began) sndMsg('소리가 시작되지 않았습니다. 무음 스위치를 끄고 볼륨을 올린 뒤 “🔊 소리 테스트”를 눌러 보세요.'); }, 2500);
     const wd = setTimeout(done, plain(seg.text).length * 450 / S.speed + 5000);
     speechSynthesis.speak(u);
   });
@@ -513,6 +527,18 @@ function init(){
     else if (e.code === 'KeyR'){ goTo(S.idx); }
   });
   if (window.speechSynthesis){ speechSynthesis.onvoiceschanged = loadVoices; }
+  ['touchstart','pointerdown','click'].forEach(ev => document.addEventListener(ev, unlockSpeech, {once:true, passive:true}));
+  $('#sndTest').onclick = () => {
+    if (!window.speechSynthesis){ sndMsg('이 브라우저는 음성 합성을 지원하지 않습니다. Safari/Chrome 최신 버전을 쓰세요.'); return; }
+    try { speechSynthesis.cancel(); speechSynthesis.resume(); } catch(e){}
+    const u = new SpeechSynthesisUtterance('こんにちは。音が聞こえますか。'); u.lang = 'ja-JP'; u.rate = 0.9;
+    const v = voiceFor('vF'); if (v) u.voice = v;
+    u.onstart = () => sndMsg('재생 중… 들리면 정상입니다');
+    u.onend = () => sndMsg('들렸다면 정상입니다. 안 들리면 무음 스위치/볼륨/일본어 음성 설치를 확인하세요');
+    u.onerror = e => sndMsg('음성 오류: ' + (e && e.error));
+    speechSynthesis.speak(u);
+    sndMsg('재생 요청함 (일본어 음성 ' + S.voices.length + '개 감지)');
+  };
   loadVoices(); setTimeout(loadVoices, 800); setTimeout(loadVoices, 2500);
   window.addEventListener('load', () => setTimeout(loadVoices, 300));
   ['1','2','3','P3','P4','D1','D2','O','HO'].forEach(t => { const b = el('button','tt' + (t === S.test ? ' on' : ''), TN[t]); b.dataset.t = t; b.onclick = () => { if (t !== S.test) switchTest(t); }; $('#tests').appendChild(b); });
